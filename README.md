@@ -74,6 +74,61 @@ CHROME_NO_SANDBOX=1
 WORKSPACE_DIR=/app/data
 ```
 
+## 部署到腾讯云 CloudBase 云托管
+
+本项目已包含 `Dockerfile`，可通过 CloudBase 云托管从源码构建部署。
+
+部署步骤：
+
+1. 打开腾讯云 CloudBase 控制台。
+2. 创建或进入一个云开发环境。
+3. 进入「云托管」。
+4. 新建服务，选择「从源代码部署」或「代码包上传」。
+5. 源码选择本仓库：
+
+```text
+https://github.com/handaize2-prog/screenshot-tool-V1
+```
+
+6. Dockerfile 路径填写：
+
+```text
+Dockerfile
+```
+
+7. 端口填写：
+
+```text
+8030
+```
+
+8. 访问类型选择：
+
+```text
+WEB / 公网访问
+```
+
+9. 推荐资源配置：
+
+```text
+CPU：1 核
+内存：2 GB
+最小实例数：0 或 1
+最大实例数：1-3
+```
+
+10. 环境变量可不填，Dockerfile 已内置默认值：
+
+```text
+CHROME_PATH=/usr/bin/chromium
+CHROME_NO_SANDBOX=1
+WORKSPACE_DIR=/app/data
+```
+
+部署完成后，在 CloudBase 服务概览页打开默认域名即可使用。
+
+注意：截图功能需要 Chromium，建议内存不要低于 1GB；如果页面较长或截图较多，建议使用 2GB 内存。
+
 ## 截图参数
 
 页面里可以设置：
