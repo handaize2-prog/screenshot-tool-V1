@@ -1,5 +1,7 @@
 # Module Screenshot Tool
 
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/handaize2-prog/screenshot-tool-V1)
+
 一个本地网页工具，用来把 HTML 页面按模块截图。
 
 它会用本机 Chrome 打开网页，按照 H5 手机宽度渲染，再把每个模块导出为 PNG 图片。
