@@ -1,0 +1,17 @@
+{
+  "name": "module-screenshot-tool",
+  "version": "1.0.0",
+  "description": "A local web tool for capturing HTML pages by module sections at H5 width.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "screenshot",
+    "html",
+    "h5",
+    "chrome",
+    "module"
+  ],
+  "license": "MIT"
+}
