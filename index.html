@@ -273,6 +273,12 @@
             <select id="fileSelect"></select>
           </div>
 
+          <div class="field">
+            <label for="htmlUpload">上传 HTML 文件</label>
+            <input id="htmlUpload" type="file" accept=".html,.htm,text/html">
+            <p class="small-note">在线部署后，建议先上传 HTML，再识别模块。</p>
+          </div>
+
           <div class="grid-2">
             <div class="field">
               <label for="cssWidth">H5 渲染宽度</label>
@@ -294,6 +300,7 @@
           </div>
 
           <div class="actions">
+            <button class="secondary" id="uploadBtn">上传文件</button>
             <button class="secondary" id="detectBtn">识别模块</button>
             <button class="primary" id="captureBtn">开始截图</button>
           </div>
@@ -326,7 +333,9 @@
     const statusBox = document.querySelector('#status');
     const detectBtn = document.querySelector('#detectBtn');
     const captureBtn = document.querySelector('#captureBtn');
+    const uploadBtn = document.querySelector('#uploadBtn');
     const manualSelectors = document.querySelector('#manualSelectors');
+    const htmlUpload = document.querySelector('#htmlUpload');
 
     let detectedSections = [];
 
@@ -338,6 +347,7 @@
     function setBusy(isBusy) {
       detectBtn.disabled = isBusy;
       captureBtn.disabled = isBusy;
+      uploadBtn.disabled = isBusy;
       document.querySelector('#refreshFiles').disabled = isBusy;
     }
 
@@ -347,6 +357,35 @@
       const data = await response.json();
       fileSelect.innerHTML = data.files.map(file => `<option value="${file}">${file}</option>`).join('');
       setStatus(`已读取 ${data.files.length} 个 HTML 文件。`);
+    }
+
+    async function uploadFile() {
+      const file = htmlUpload.files[0];
+      if (!file) {
+        setStatus('请先选择一个 HTML 文件。', 'error');
+        return;
+      }
+      setBusy(true);
+      setStatus('正在上传 HTML 文件...');
+      try {
+        const form = new FormData();
+        form.append('file', file);
+        const response = await fetch('/api/upload', {
+          method: 'POST',
+          body: form
+        });
+        const data = await response.json();
+        if (!response.ok || data.error) throw new Error(data.error || '上传失败');
+        fileSelect.innerHTML = data.files.map(item => `<option value="${item}">${item}</option>`).join('');
+        fileSelect.value = data.file;
+        detectedSections = [];
+        moduleList.innerHTML = '<div class="empty">文件已上传，点击“识别模块”。</div>';
+        setStatus(`上传完成：${data.file}`, 'ok');
+      } catch (error) {
+        setStatus(error.message, 'error');
+      } finally {
+        setBusy(false);
+      }
     }
 
     function renderModules(sections) {
@@ -447,7 +486,7 @@
         const lines = [
           `截图完成：${data.results.filter(item => !item.skipped).length} 张`,
           `保存目录：${data.outputDir}`,
-          ...data.results.map(item => item.skipped ? `跳过 ${item.selector}：${item.reason}` : `${item.fileName}`)
+          ...data.results.map(item => item.skipped ? `跳过 ${item.selector}：${item.reason}` : `${item.fileName}  ${location.origin}${item.downloadUrl}`)
         ];
         setStatus(lines.join('\n'), 'ok');
       } catch (error) {
@@ -458,6 +497,7 @@
     }
 
     document.querySelector('#refreshFiles').addEventListener('click', loadFiles);
+    uploadBtn.addEventListener('click', uploadFile);
     detectBtn.addEventListener('click', detectModules);
     captureBtn.addEventListener('click', captureModules);
     document.querySelector('#selectAll').addEventListener('click', () => {

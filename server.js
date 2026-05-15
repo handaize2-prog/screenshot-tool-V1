@@ -1,12 +1,19 @@
 const fs = require('fs');
 const path = require('path');
 const http = require('http');
+const os = require('os');
 const { spawn } = require('child_process');
 
-const workspace = path.resolve(process.env.WORKSPACE_DIR || path.resolve(__dirname, '..'));
+const workspace = path.resolve(process.env.WORKSPACE_DIR || __dirname);
 const toolRoot = __dirname;
 const chromePath = process.env.CHROME_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 const port = Number(process.env.PORT || 8030);
+const host = process.env.HOST || '0.0.0.0';
+const uploadsDir = path.join(workspace, 'uploads');
+const capturesDir = path.join(workspace, 'captures');
+
+fs.mkdirSync(uploadsDir, { recursive: true });
+fs.mkdirSync(capturesDir, { recursive: true });
 
 const mimeTypes = {
   '.html': 'text/html; charset=utf-8',
@@ -38,19 +45,29 @@ function safeWorkspacePath(relativePath) {
 }
 
 function listHtmlFiles() {
-  return fs.readdirSync(workspace)
+  const rootFiles = fs.readdirSync(workspace)
     .filter(name => name.toLowerCase().endsWith('.html'))
-    .sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
+    .filter(name => name !== 'index.html');
+  const uploadFiles = fs.readdirSync(uploadsDir)
+    .filter(name => name.toLowerCase().endsWith('.html'))
+    .map(name => `uploads/${name}`);
+  return [...rootFiles, ...uploadFiles].sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'));
 }
 
-function readBody(req) {
+function readBody(req, limit = 1024 * 1024) {
   return new Promise((resolve, reject) => {
-    let body = '';
+    const chunks = [];
+    let length = 0;
     req.on('data', chunk => {
-      body += chunk;
-      if (body.length > 1024 * 1024) reject(new Error('请求内容过大'));
+      length += chunk.length;
+      if (length > limit) {
+        reject(new Error('请求内容过大'));
+        req.destroy();
+        return;
+      }
+      chunks.push(chunk);
     });
-    req.on('end', () => resolve(body));
+    req.on('end', () => resolve(Buffer.concat(chunks)));
     req.on('error', reject);
   });
 }
@@ -107,10 +124,56 @@ function uniqueOutputDir(baseName) {
   return dir;
 }
 
+function uniqueCaptureDir(baseName) {
+  const now = new Date();
+  const stamp = [
+    now.getFullYear(),
+    String(now.getMonth() + 1).padStart(2, '0'),
+    String(now.getDate()).padStart(2, '0'),
+    '-',
+    String(now.getHours()).padStart(2, '0'),
+    String(now.getMinutes()).padStart(2, '0'),
+    String(now.getSeconds()).padStart(2, '0')
+  ].join('');
+  const folderName = `${sanitizeFileName(baseName)}-模块截图-${stamp}`;
+  const dir = path.join(capturesDir, folderName);
+  fs.mkdirSync(dir, { recursive: true });
+  return { dir, folderName };
+}
+
+function parseMultipartUpload(req, body) {
+  const contentType = req.headers['content-type'] || '';
+  const match = contentType.match(/boundary=(?:"([^"]+)"|([^;]+))/i);
+  if (!match) throw new Error('上传格式错误：缺少 boundary');
+  const boundary = Buffer.from(`--${match[1] || match[2]}`);
+  const start = body.indexOf(boundary);
+  if (start < 0) throw new Error('上传格式错误：找不到文件边界');
+  const headerEnd = body.indexOf(Buffer.from('\r\n\r\n'), start);
+  if (headerEnd < 0) throw new Error('上传格式错误：找不到文件头');
+  const header = body.slice(start + boundary.length + 2, headerEnd).toString('utf8');
+  const filenameMatch = header.match(/filename="([^"]+)"/i);
+  if (!filenameMatch) throw new Error('请选择 HTML 文件');
+  const nextBoundary = body.indexOf(Buffer.from(`\r\n--${match[1] || match[2]}`), headerEnd + 4);
+  if (nextBoundary < 0) throw new Error('上传格式错误：找不到文件结尾');
+  return {
+    filename: sanitizeFileName(filenameMatch[1].replace(/\.html?$/i, '')) + '.html',
+    content: body.slice(headerEnd + 4, nextBoundary)
+  };
+}
+
+async function saveUploadedHtml(req) {
+  const body = await readBody(req, 20 * 1024 * 1024);
+  const upload = parseMultipartUpload(req, body);
+  const finalName = `${Date.now()}-${upload.filename}`;
+  const outputPath = path.join(uploadsDir, finalName);
+  fs.writeFileSync(outputPath, upload.content);
+  return `uploads/${finalName}`;
+}
+
 async function withChrome(pageFile, options, callback) {
   const pagePort = 8100 + Math.floor(Math.random() * 500);
   const debugPort = 9300 + Math.floor(Math.random() * 500);
-  const profile = path.join('C:\\tmp', `chrome-module-shot-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const profile = path.join(os.tmpdir(), `chrome-module-shot-${Date.now()}-${Math.random().toString(16).slice(2)}`);
   const pagePath = safeWorkspacePath(pageFile);
   if (!fs.existsSync(pagePath)) throw new Error(`找不到文件：${pageFile}`);
 
@@ -133,7 +196,7 @@ async function withChrome(pageFile, options, callback) {
   });
 
   await new Promise(resolve => staticServer.listen(pagePort, '127.0.0.1', resolve));
-  const chrome = spawn(chromePath, [
+  const chromeArgs = [
     `--remote-debugging-port=${debugPort}`,
     `--user-data-dir=${profile}`,
     '--headless=new',
@@ -142,7 +205,11 @@ async function withChrome(pageFile, options, callback) {
     '--no-first-run',
     '--no-default-browser-check',
     `http://127.0.0.1:${pagePort}/`
-  ], { stdio: 'ignore' });
+  ];
+  if (process.env.CHROME_NO_SANDBOX === '1' || process.platform !== 'win32') {
+    chromeArgs.splice(5, 0, '--no-sandbox', '--disable-dev-shm-usage');
+  }
+  const chrome = spawn(chromePath, chromeArgs, { stdio: 'ignore' });
 
   try {
     for (let i = 0; i < 80; i++) {
@@ -226,7 +293,7 @@ async function detectSections(file) {
 }
 
 async function captureSections(file, sections, options) {
-  const outputDir = uniqueOutputDir(path.basename(file, '.html'));
+  const { dir: outputDir, folderName } = uniqueCaptureDir(path.basename(file, '.html'));
   const results = [];
   await withChrome(file, options, async ({ cdp, cssWidth }) => {
     for (let i = 0; i < sections.length; i++) {
@@ -255,10 +322,16 @@ async function captureSections(file, sections, options) {
       const fileName = `${String(i + 1).padStart(2, '0')}-${name}.png`;
       const outputPath = path.join(outputDir, fileName);
       fs.writeFileSync(outputPath, Buffer.from(screenshot.data, 'base64'));
-      results.push({ selector, fileName, outputPath, height: rect.height });
+      results.push({
+        selector,
+        fileName,
+        outputPath,
+        downloadUrl: `/captures/${encodeURIComponent(folderName)}/${encodeURIComponent(fileName)}`,
+        height: rect.height
+      });
     }
   });
-  return { outputDir, results };
+  return { outputDir, folderName, results };
 }
 
 async function handleApi(req, res) {
@@ -266,6 +339,12 @@ async function handleApi(req, res) {
   try {
     if (url.pathname === '/api/files') {
       sendJson(res, 200, { files: listHtmlFiles() });
+      return;
+    }
+
+    if (url.pathname === '/api/upload' && req.method === 'POST') {
+      const file = await saveUploadedHtml(req);
+      sendJson(res, 200, { file, files: listHtmlFiles() });
       return;
     }
 
@@ -278,7 +357,7 @@ async function handleApi(req, res) {
     }
 
     if (url.pathname === '/api/capture' && req.method === 'POST') {
-      const payload = JSON.parse(await readBody(req));
+      const payload = JSON.parse((await readBody(req)).toString('utf8'));
       if (!payload.file) throw new Error('请选择 HTML 文件');
       if (!Array.isArray(payload.sections) || payload.sections.length === 0) throw new Error('请至少选择一个模块');
       const result = await captureSections(payload.file, payload.sections, {
@@ -304,6 +383,22 @@ const server = http.createServer((req, res) => {
     return;
   }
 
+  if (url.pathname.startsWith('/captures/')) {
+    try {
+      const target = path.resolve(capturesDir, decodeURIComponent(url.pathname.replace('/captures/', '')));
+      if (!target.startsWith(capturesDir + path.sep) || !fs.existsSync(target)) {
+        sendText(res, 404, 'Not found');
+        return;
+      }
+      const ext = path.extname(target).toLowerCase();
+      res.writeHead(200, { 'Content-Type': mimeTypes[ext] || 'application/octet-stream' });
+      fs.createReadStream(target).pipe(res);
+    } catch (error) {
+      sendText(res, 404, 'Not found');
+    }
+    return;
+  }
+
   const fileName = url.pathname === '/' ? 'index.html' : url.pathname.slice(1);
   const filePath = path.resolve(toolRoot, fileName);
   if (!filePath.startsWith(toolRoot + path.sep) || !fs.existsSync(filePath)) {
@@ -315,6 +410,6 @@ const server = http.createServer((req, res) => {
   fs.createReadStream(filePath).pipe(res);
 });
 
-server.listen(port, '127.0.0.1', () => {
-  console.log(`模块截图工具已启动：http://127.0.0.1:${port}`);
+server.listen(port, host, () => {
+  console.log(`模块截图工具已启动：http://${host}:${port}`);
 });

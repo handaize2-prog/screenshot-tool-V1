@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: screenshot-tool-v1
+    env: docker
+    plan: free
+    autoDeploy: true

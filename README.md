@@ -7,11 +7,12 @@
 ## 功能
 
 - 自动读取工作目录中的 `.html` 文件
+- 支持在线上传 `.html` 文件
 - 自动识别 `section` 和 `footer` 模块
 - 支持手动输入 CSS 选择器，例如 `#team`、`.pricing-inquiry`
 - 默认按 `430px` H5 宽度渲染
 - 默认导出 `1420px` 宽 PNG 图片
-- 截图文件自动保存到工作目录下的新文件夹
+- 截图文件自动保存到工作目录下的新文件夹，并提供下载链接
 
 ## 环境要求
 
@@ -27,19 +28,9 @@ C:\Program Files\Google\Chrome\Application\chrome.exe
 
 ## 使用方法
 
-把 `module-screenshot-tool` 文件夹放到你的网页目录下面，例如：
-
-```text
-网页优化/
-  module-screenshot-tool/
-  about-h5.html
-  feasibility-study-h5.html
-```
-
-然后进入工具目录：
+本地运行：
 
 ```powershell
-cd module-screenshot-tool
 npm start
 ```
 
@@ -52,12 +43,33 @@ http://127.0.0.1:8030
 ## 工作目录
 
 默认情况下，工具会读取它上一级目录里的 HTML 文件。
+在线部署后，建议直接在页面中上传 HTML 文件。
 
 如果你想指定其他目录，可以设置环境变量：
 
 ```powershell
 $env:WORKSPACE_DIR="C:\你的网页目录"
 npm start
+```
+
+## 部署到 Render
+
+本项目已包含 `Dockerfile` 和 `render.yaml`。
+
+部署步骤：
+
+1. 打开 Render。
+2. New + 选择 Blueprint 或 Web Service。
+3. 连接本仓库。
+4. Render 会使用 Docker 构建服务。
+5. 部署完成后打开 Render 提供的网址即可使用。
+
+Docker 环境会自动安装 Chromium，并通过下面的环境变量调用：
+
+```text
+CHROME_PATH=/usr/bin/chromium
+CHROME_NO_SANDBOX=1
+WORKSPACE_DIR=/app/data
 ```
 
 ## 截图参数

@@ -1,0 +1,6 @@
+.git
+node_modules
+captures
+uploads
+*.log
+*-模块截图-*
