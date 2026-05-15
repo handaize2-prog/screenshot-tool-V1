@@ -22,7 +22,8 @@ const mimeTypes = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
-  '.svg': 'image/svg+xml; charset=utf-8'
+  '.svg': 'image/svg+xml; charset=utf-8',
+  '.zip': 'application/zip'
 };
 
 function sendJson(res, status, payload) {
@@ -33,6 +34,11 @@ function sendJson(res, status, payload) {
 function sendText(res, status, text) {
   res.writeHead(status, { 'Content-Type': 'text/plain; charset=utf-8' });
   res.end(text);
+}
+
+function contentDisposition(fileName) {
+  const safeName = sanitizeFileName(fileName || 'download');
+  return `attachment; filename="${encodeURIComponent(safeName)}"; filename*=UTF-8''${encodeURIComponent(safeName)}`;
 }
 
 function safeWorkspacePath(relativePath) {
@@ -139,6 +145,115 @@ function uniqueCaptureDir(baseName) {
   const dir = path.join(capturesDir, folderName);
   fs.mkdirSync(dir, { recursive: true });
   return { dir, folderName };
+}
+
+const crcTable = (() => {
+  const table = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let j = 0; j < 8; j++) {
+      c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    }
+    table[i] = c >>> 0;
+  }
+  return table;
+})();
+
+function crc32(buffer) {
+  let crc = 0xFFFFFFFF;
+  for (const byte of buffer) {
+    crc = crcTable[(crc ^ byte) & 0xFF] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+
+function dosDateTime(date = new Date()) {
+  const year = Math.max(date.getFullYear(), 1980);
+  const time = (date.getHours() << 11) | (date.getMinutes() << 5) | Math.floor(date.getSeconds() / 2);
+  const day = ((year - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate();
+  return { time, day };
+}
+
+function makeZip(files) {
+  const chunks = [];
+  const central = [];
+  let offset = 0;
+  const { time, day } = dosDateTime();
+
+  for (const file of files) {
+    const name = Buffer.from(file.name, 'utf8');
+    const data = file.data;
+    const crc = crc32(data);
+
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034B50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(0x0800, 6);
+    local.writeUInt16LE(0, 8);
+    local.writeUInt16LE(time, 10);
+    local.writeUInt16LE(day, 12);
+    local.writeUInt32LE(crc, 14);
+    local.writeUInt32LE(data.length, 18);
+    local.writeUInt32LE(data.length, 22);
+    local.writeUInt16LE(name.length, 26);
+    local.writeUInt16LE(0, 28);
+    chunks.push(local, name, data);
+
+    const header = Buffer.alloc(46);
+    header.writeUInt32LE(0x02014B50, 0);
+    header.writeUInt16LE(20, 4);
+    header.writeUInt16LE(20, 6);
+    header.writeUInt16LE(0x0800, 8);
+    header.writeUInt16LE(0, 10);
+    header.writeUInt16LE(time, 12);
+    header.writeUInt16LE(day, 14);
+    header.writeUInt32LE(crc, 16);
+    header.writeUInt32LE(data.length, 20);
+    header.writeUInt32LE(data.length, 24);
+    header.writeUInt16LE(name.length, 28);
+    header.writeUInt16LE(0, 30);
+    header.writeUInt16LE(0, 32);
+    header.writeUInt16LE(0, 34);
+    header.writeUInt16LE(0, 36);
+    header.writeUInt32LE(0, 38);
+    header.writeUInt32LE(offset, 42);
+    central.push(header, name);
+
+    offset += local.length + name.length + data.length;
+  }
+
+  const centralSize = central.reduce((sum, chunk) => sum + chunk.length, 0);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054B50, 0);
+  end.writeUInt16LE(0, 4);
+  end.writeUInt16LE(0, 6);
+  end.writeUInt16LE(files.length, 8);
+  end.writeUInt16LE(files.length, 10);
+  end.writeUInt32LE(centralSize, 12);
+  end.writeUInt32LE(offset, 16);
+  end.writeUInt16LE(0, 20);
+  return Buffer.concat([...chunks, ...central, end]);
+}
+
+function zipCaptureFolder(folderName) {
+  const cleanFolder = path.basename(String(folderName || ''));
+  if (!cleanFolder) throw new Error('缺少截图文件夹');
+  const folderPath = path.resolve(capturesDir, cleanFolder);
+  if (!folderPath.startsWith(capturesDir + path.sep) || !fs.existsSync(folderPath)) {
+    throw new Error('截图文件夹不存在');
+  }
+  const files = fs.readdirSync(folderPath)
+    .filter(name => name.toLowerCase().endsWith('.png'))
+    .sort((a, b) => a.localeCompare(b, 'zh-Hans-CN'))
+    .map(name => ({
+      name,
+      data: fs.readFileSync(path.join(folderPath, name))
+    }));
+  if (!files.length) throw new Error('截图文件夹中没有 PNG 图片');
+  return {
+    fileName: `${cleanFolder}.zip`,
+    data: makeZip(files)
+  };
 }
 
 function parseMultipartUpload(req, body) {
@@ -370,6 +485,18 @@ async function handleApi(req, res) {
       return;
     }
 
+    if (url.pathname === '/api/download-zip') {
+      const folder = url.searchParams.get('folder');
+      const zip = zipCaptureFolder(folder);
+      res.writeHead(200, {
+        'Content-Type': mimeTypes['.zip'],
+        'Content-Disposition': contentDisposition(zip.fileName),
+        'Content-Length': zip.data.length
+      });
+      res.end(zip.data);
+      return;
+    }
+
     sendJson(res, 404, { error: '接口不存在' });
   } catch (error) {
     sendJson(res, 500, { error: error.message });
@@ -391,7 +518,11 @@ const server = http.createServer((req, res) => {
         return;
       }
       const ext = path.extname(target).toLowerCase();
-      res.writeHead(200, { 'Content-Type': mimeTypes[ext] || 'application/octet-stream' });
+      const headers = { 'Content-Type': mimeTypes[ext] || 'application/octet-stream' };
+      if (url.searchParams.get('download') === '1') {
+        headers['Content-Disposition'] = contentDisposition(path.basename(target));
+      }
+      res.writeHead(200, headers);
       fs.createReadStream(target).pipe(res);
     } catch (error) {
       sendText(res, 404, 'Not found');

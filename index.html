@@ -235,6 +235,59 @@
       line-height: 1.6;
     }
 
+    .results {
+      display: grid;
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .results:empty {
+      display: none;
+    }
+
+    .download-all,
+    .result-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--white);
+    }
+
+    .result-name {
+      min-width: 0;
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1.5;
+      word-break: break-all;
+    }
+
+    .result-meta {
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 400;
+    }
+
+    .download-link {
+      flex: 0 0 auto;
+      border-radius: 6px;
+      padding: 9px 12px;
+      background: var(--primary);
+      color: #fff;
+      font-size: 13px;
+      font-weight: 700;
+      text-decoration: none;
+    }
+
+    .download-link.secondary-link {
+      background: var(--soft);
+      color: var(--primary);
+      border: 1px solid var(--line);
+    }
+
     @media (max-width: 860px) {
       .app {
         padding: 18px;
@@ -306,6 +359,7 @@
           </div>
 
           <div class="status" id="status">等待操作。</div>
+          <div class="results" id="results"></div>
         </div>
       </section>
 
@@ -336,6 +390,7 @@
     const uploadBtn = document.querySelector('#uploadBtn');
     const manualSelectors = document.querySelector('#manualSelectors');
     const htmlUpload = document.querySelector('#htmlUpload');
+    const resultsBox = document.querySelector('#results');
 
     let detectedSections = [];
 
@@ -351,7 +406,48 @@
       document.querySelector('#refreshFiles').disabled = isBusy;
     }
 
+    function clearResults() {
+      resultsBox.innerHTML = '';
+    }
+
+    function downloadUrl(url) {
+      const separator = url.includes('?') ? '&' : '?';
+      return `${url}${separator}download=1`;
+    }
+
+    function renderResults(data) {
+      const finished = data.results.filter(item => !item.skipped);
+      if (!finished.length) {
+        clearResults();
+        return;
+      }
+
+      const zipUrl = `/api/download-zip?folder=${encodeURIComponent(data.folderName)}`;
+      resultsBox.innerHTML = `
+        <div class="download-all">
+          <div class="result-name">
+            全部截图
+            <div class="result-meta">${finished.length} 张 PNG，打包为 ZIP 下载到电脑</div>
+          </div>
+          <a class="download-link" href="${zipUrl}" download="${escapeHtml(data.folderName)}.zip">下载全部</a>
+        </div>
+        ${finished.map(item => {
+          const url = downloadUrl(item.downloadUrl);
+          return `
+            <div class="result-item">
+              <div class="result-name">
+                ${escapeHtml(item.fileName)}
+                <div class="result-meta">高度 ${item.height}px</div>
+              </div>
+              <a class="download-link secondary-link" href="${url}" download="${escapeHtml(item.fileName)}">下载图片</a>
+            </div>
+          `;
+        }).join('')}
+      `;
+    }
+
     async function loadFiles() {
+      clearResults();
       setStatus('正在读取 HTML 文件...');
       const response = await fetch('/api/files');
       const data = await response.json();
@@ -366,6 +462,7 @@
         return;
       }
       setBusy(true);
+      clearResults();
       setStatus('正在上传 HTML 文件...');
       try {
         const form = new FormData();
@@ -420,6 +517,7 @@
       const file = fileSelect.value;
       if (!file) return;
       setBusy(true);
+      clearResults();
       setStatus('正在打开页面并识别模块...');
       try {
         const response = await fetch(`/api/detect?file=${encodeURIComponent(file)}`);
@@ -469,6 +567,7 @@
       }
 
       setBusy(true);
+      clearResults();
       setStatus('正在截图，页面较长时需要稍等...');
       try {
         const response = await fetch('/api/capture', {
@@ -488,6 +587,7 @@
           `保存目录：${data.outputDir}`,
           ...data.results.map(item => item.skipped ? `跳过 ${item.selector}：${item.reason}` : `${item.fileName}  ${location.origin}${item.downloadUrl}`)
         ];
+        renderResults(data);
         setStatus(lines.join('\n'), 'ok');
       } catch (error) {
         setStatus(error.message, 'error');
@@ -508,6 +608,7 @@
     });
     fileSelect.addEventListener('change', () => {
       detectedSections = [];
+      clearResults();
       moduleList.innerHTML = '<div class="empty">文件已切换，点击“识别模块”。</div>';
     });
 
