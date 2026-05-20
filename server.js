@@ -6,7 +6,16 @@ const { spawn } = require('child_process');
 
 const workspace = path.resolve(process.env.WORKSPACE_DIR || __dirname);
 const toolRoot = __dirname;
-const chromePath = process.env.CHROME_PATH || 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
+function defaultBrowserPath() {
+  const candidates = [
+    'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+    'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
+  ];
+  return candidates.find(candidate => fs.existsSync(candidate)) || candidates[candidates.length - 1];
+}
+
+const chromePath = process.env.CHROME_PATH || defaultBrowserPath();
 const port = Number(process.env.PORT || 8030);
 const host = process.env.HOST || '0.0.0.0';
 const uploadsDir = path.join(workspace, 'uploads');
@@ -327,13 +336,18 @@ async function withChrome(pageFile, options, callback) {
   const chrome = spawn(chromePath, chromeArgs, { stdio: 'ignore' });
 
   try {
+    let chromeReady = false;
     for (let i = 0; i < 80; i++) {
       try {
         await requestJson(debugPort, '/json/version');
+        chromeReady = true;
         break;
       } catch {
         await wait(250);
       }
+    }
+    if (!chromeReady) {
+      throw new Error(`浏览器启动失败，请检查浏览器路径：${chromePath}`);
     }
 
     const tab = await requestJson(debugPort, '/json/new?about:blank', 'PUT');
@@ -369,8 +383,26 @@ async function withChrome(pageFile, options, callback) {
       expression: `
         document.querySelectorAll('.fade-in').forEach(el => el.classList.add('visible'));
         document.querySelectorAll('.faq-item').forEach(item => item.classList.remove('active'));
+        document.querySelectorAll('*').forEach(el => {
+          const style = window.getComputedStyle(el);
+          const rect = el.getBoundingClientRect();
+          const isVisible = rect.width > 0 && rect.height > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+          const isFixedLayer = style.position === 'fixed' && isVisible;
+          const isLikelyFloatingCta = isFixedLayer && (
+            rect.bottom > window.innerHeight * 0.55 ||
+            /float|fixed|sticky|consult|contact|phone|tel|call|chat|cta|bottom/i.test(el.className || '') ||
+            /咨询|电话|拨打|联系/.test(el.textContent || '')
+          );
+          if (isLikelyFloatingCta) {
+            el.setAttribute('data-module-shot-hidden-fixed', 'true');
+          }
+        });
         const style = document.createElement('style');
-        style.textContent = '.nav,.header,.inland-security-footer{display:none!important} body{box-shadow:none!important}';
+        style.textContent = [
+          '.nav,.header,.inland-security-footer{display:none!important}',
+          '[data-module-shot-hidden-fixed="true"]{display:none!important}',
+          'body{box-shadow:none!important}'
+        ].join(' ');
         document.head.appendChild(style);
         true;
       `
