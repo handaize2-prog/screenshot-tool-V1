@@ -425,14 +425,52 @@ async function withChrome(pageFile, options, callback) {
 async function detectSections(file) {
   return withChrome(file, { cssWidth: 430, outputWidth: 1420 }, async ({ cdp }) => {
     const result = await cdp('Runtime.evaluate', {
-      expression: `JSON.stringify(Array.from(document.querySelectorAll('section, footer')).map((el, index) => {
-        const title = el.querySelector('h1,h2,h3,h4')?.textContent?.replace(/\\s+/g, ' ').trim() || el.id || el.className || el.tagName.toLowerCase();
-        const id = el.id ? '#' + CSS.escape(el.id) : '';
-        const classes = Array.from(el.classList || []).map(c => '.' + CSS.escape(c)).join('');
-        const selector = id || (el.tagName.toLowerCase() + classes);
-        const r = el.getBoundingClientRect();
-        return { index: index + 1, title, selector, height: Math.round(r.height) };
-      }))`,
+      expression: `JSON.stringify((() => {
+        function simpleSelector(el) {
+          if (el.id) return '#' + CSS.escape(el.id);
+          let selector = el.tagName.toLowerCase();
+          const classes = Array.from(el.classList || []).filter(Boolean);
+          if (classes.length) {
+            selector += classes.map(c => '.' + CSS.escape(c)).join('');
+          }
+          if (el.parentElement) {
+            const sameTagSiblings = Array.from(el.parentElement.children)
+              .filter(item => item.tagName === el.tagName);
+            if (sameTagSiblings.length > 1) {
+              selector += ':nth-of-type(' + (sameTagSiblings.indexOf(el) + 1) + ')';
+            }
+          }
+          return selector;
+        }
+
+        function uniqueSelector(el) {
+          if (el.id) return '#' + CSS.escape(el.id);
+          const parts = [];
+          let node = el;
+          while (node && node.nodeType === 1 && node !== document.documentElement) {
+            parts.unshift(simpleSelector(node));
+            const selector = parts.join(' > ');
+            if (document.querySelectorAll(selector).length === 1) {
+              return selector;
+            }
+            node = node.parentElement;
+          }
+          return parts.join(' > ');
+        }
+
+        return Array.from(document.querySelectorAll('section, footer')).map((el, index) => {
+          const title = el.querySelector('h1,h2,h3,h4')?.textContent?.replace(/\\s+/g, ' ').trim() || el.id || el.className || el.tagName.toLowerCase();
+          const selector = uniqueSelector(el);
+          const r = el.getBoundingClientRect();
+          return {
+            index: index + 1,
+            title,
+            selector,
+            height: Math.round(r.height),
+            matchCount: document.querySelectorAll(selector).length
+          };
+        });
+      })())`,
       returnByValue: true
     });
     return JSON.parse(result.result.value);
