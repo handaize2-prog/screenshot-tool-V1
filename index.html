@@ -235,6 +235,42 @@
       line-height: 1.6;
     }
 
+    .mode-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+    }
+
+    .mode-option {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: var(--soft);
+      color: var(--text);
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .mode-option.active {
+      border-color: var(--accent);
+      background: rgba(37, 99, 235, 0.08);
+      color: var(--primary);
+    }
+
+    .mode-option strong {
+      display: block;
+      font-size: 14px;
+      margin-bottom: 4px;
+    }
+
+    .mode-option span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 400;
+      line-height: 1.5;
+    }
+
     .results {
       display: grid;
       gap: 10px;
@@ -327,15 +363,35 @@
           </div>
 
           <div class="field">
+            <label for="viewportHeight">视口高度</label>
+            <input id="viewportHeight" type="number" value="1400" min="600" max="3000">
+            <p class="small-note">PC 模式会用电脑端布局识别模块；H5 模式会用手机端布局识别模块。</p>
+          </div>
+
+          <div class="field">
             <label for="htmlUpload">上传 HTML 文件</label>
             <input id="htmlUpload" type="file" accept=".html,.htm,text/html">
             <p class="small-note">在线部署后，建议先上传 HTML，再识别模块。</p>
           </div>
 
+          <div class="field">
+            <label>截图模式</label>
+            <div class="mode-grid">
+              <button class="mode-option active" id="modeH5" type="button" data-mode="h5">
+                <strong>H5 手机端</strong>
+                <span>430px 渲染，1420px 导出</span>
+              </button>
+              <button class="mode-option" id="modePc" type="button" data-mode="pc">
+                <strong>PC 电脑端</strong>
+                <span>1440px 桌面渲染，1440px 导出</span>
+              </button>
+            </div>
+          </div>
+
           <div class="grid-2">
             <div class="field">
               <label for="cssWidth">H5 渲染宽度</label>
-              <input id="cssWidth" type="number" value="430" min="280" max="800">
+              <input id="cssWidth" type="number" value="430" min="280" max="2400">
             </div>
             <div class="field">
               <label for="outputWidth">导出图片宽度</label>
@@ -391,8 +447,17 @@
     const manualSelectors = document.querySelector('#manualSelectors');
     const htmlUpload = document.querySelector('#htmlUpload');
     const resultsBox = document.querySelector('#results');
+    const cssWidthInput = document.querySelector('#cssWidth');
+    const outputWidthInput = document.querySelector('#outputWidth');
+    const viewportHeightInput = document.querySelector('#viewportHeight');
+    const modeButtons = Array.from(document.querySelectorAll('.mode-option'));
 
     let detectedSections = [];
+    let currentMode = 'h5';
+    const presets = {
+      h5: { cssWidth: 430, outputWidth: 1420, viewportHeight: 1400, mobile: true },
+      pc: { cssWidth: 1440, outputWidth: 1440, viewportHeight: 1200, mobile: false }
+    };
 
     function setStatus(text, type = '') {
       statusBox.className = `status ${type}`;
@@ -408,6 +473,29 @@
 
     function clearResults() {
       resultsBox.innerHTML = '';
+    }
+
+    function currentPreset() {
+      return {
+        cssWidth: Number(cssWidthInput.value || presets[currentMode].cssWidth),
+        outputWidth: Number(outputWidthInput.value || presets[currentMode].outputWidth),
+        viewportHeight: Number(viewportHeightInput.value || presets[currentMode].viewportHeight),
+        mobile: currentMode !== 'pc'
+      };
+    }
+
+    function applyMode(mode) {
+      currentMode = mode === 'pc' ? 'pc' : 'h5';
+      const preset = presets[currentMode];
+      cssWidthInput.value = preset.cssWidth;
+      outputWidthInput.value = preset.outputWidth;
+      viewportHeightInput.value = preset.viewportHeight;
+      modeButtons.forEach(button => {
+        button.classList.toggle('active', button.dataset.mode === currentMode);
+      });
+      detectedSections = [];
+      clearResults();
+      moduleList.innerHTML = '<div class="empty">模式已切换，请重新点击“识别模块”。</div>';
     }
 
     function downloadUrl(url) {
@@ -520,7 +608,15 @@
       clearResults();
       setStatus('正在打开页面并识别模块...');
       try {
-        const response = await fetch(`/api/detect?file=${encodeURIComponent(file)}`);
+        const preset = currentPreset();
+        const params = new URLSearchParams({
+          file,
+          cssWidth: String(preset.cssWidth),
+          outputWidth: String(preset.outputWidth),
+          viewportHeight: String(preset.viewportHeight),
+          mobile: String(preset.mobile)
+        });
+        const response = await fetch(`/api/detect?${params.toString()}`);
         const data = await response.json();
         if (!response.ok || data.error) throw new Error(data.error || '识别失败');
         renderModules(data.sections);
@@ -570,14 +666,17 @@
       clearResults();
       setStatus('正在截图，页面较长时需要稍等...');
       try {
+        const preset = currentPreset();
         const response = await fetch('/api/capture', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             file,
             sections,
-            cssWidth: Number(document.querySelector('#cssWidth').value || 430),
-            outputWidth: Number(document.querySelector('#outputWidth').value || 1420)
+            cssWidth: preset.cssWidth,
+            outputWidth: preset.outputWidth,
+            viewportHeight: preset.viewportHeight,
+            mobile: preset.mobile
           })
         });
         const data = await response.json();
@@ -600,6 +699,9 @@
     uploadBtn.addEventListener('click', uploadFile);
     detectBtn.addEventListener('click', detectModules);
     captureBtn.addEventListener('click', captureModules);
+    modeButtons.forEach(button => {
+      button.addEventListener('click', () => applyMode(button.dataset.mode));
+    });
     document.querySelector('#selectAll').addEventListener('click', () => {
       moduleList.querySelectorAll('input[type="checkbox"]').forEach(input => input.checked = true);
     });
@@ -612,6 +714,7 @@
       moduleList.innerHTML = '<div class="empty">文件已切换，点击“识别模块”。</div>';
     });
 
+    applyMode(new URLSearchParams(location.search).get('preset') || 'h5');
     loadFiles();
   </script>
 </body>

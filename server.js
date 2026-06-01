@@ -8,9 +8,9 @@ const workspace = path.resolve(process.env.WORKSPACE_DIR || __dirname);
 const toolRoot = __dirname;
 function defaultBrowserPath() {
   const candidates = [
-    'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
     'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
-    'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe'
+    'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe'
   ];
   return candidates.find(candidate => fs.existsSync(candidate)) || candidates[candidates.length - 1];
 }
@@ -375,7 +375,7 @@ async function withChrome(pageFile, options, callback) {
       width: cssWidth,
       height: Number(options.viewportHeight || 1400),
       deviceScaleFactor: scale,
-      mobile: true
+      mobile: options.mobile !== false
     });
     await cdp('Page.navigate', { url: `http://127.0.0.1:${pagePort}/` });
     await wait(Number(options.waitMs || 1200));
@@ -422,8 +422,13 @@ async function withChrome(pageFile, options, callback) {
   }
 }
 
-async function detectSections(file) {
-  return withChrome(file, { cssWidth: 430, outputWidth: 1420 }, async ({ cdp }) => {
+async function detectSections(file, options = {}) {
+  return withChrome(file, {
+    cssWidth: options.cssWidth || 430,
+    outputWidth: options.outputWidth || 1420,
+    viewportHeight: options.viewportHeight || 1400,
+    mobile: options.mobile !== false
+  }, async ({ cdp }) => {
     const result = await cdp('Runtime.evaluate', {
       expression: `JSON.stringify((() => {
         function simpleSelector(el) {
@@ -536,7 +541,12 @@ async function handleApi(req, res) {
     if (url.pathname === '/api/detect') {
       const file = url.searchParams.get('file');
       if (!file) throw new Error('缺少 file 参数');
-      const sections = await detectSections(file);
+      const sections = await detectSections(file, {
+        cssWidth: Number(url.searchParams.get('cssWidth') || 430),
+        outputWidth: Number(url.searchParams.get('outputWidth') || 1420),
+        viewportHeight: Number(url.searchParams.get('viewportHeight') || 1400),
+        mobile: url.searchParams.get('mobile') !== 'false'
+      });
       sendJson(res, 200, { sections });
       return;
     }
@@ -549,6 +559,7 @@ async function handleApi(req, res) {
         cssWidth: payload.cssWidth || 430,
         outputWidth: payload.outputWidth || 1420,
         viewportHeight: payload.viewportHeight || 1400,
+        mobile: payload.mobile !== false,
         waitMs: payload.waitMs || 1200
       });
       sendJson(res, 200, result);
